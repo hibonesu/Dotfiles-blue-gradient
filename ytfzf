@@ -13,6 +13,7 @@ else
     YTDL_PATH="$(command -v yt-dlp)"
 fi
 
+#rada ga kepake bikin puyeng doang
 CHAFA_FORMAT="auto"
 [ -n "$TMUX" ] && CHAFA_FORMAT="symbols"
 
