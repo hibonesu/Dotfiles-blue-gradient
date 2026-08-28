@@ -1,0 +1,26 @@
+#!/bin/bash
+
+echo "[1/3] start Audio Server (JACK + OpenSLES)..."
+# Jalanin jackd ga nyampah log
+jackd -d opensles > /dev/null 2>&1 &
+JACK_PID=$!
+sleep 2
+
+echo "[2/3] Booting SuperCollider & FoxDot Synth..."
+# jegat dikit gapapa
+export QT_QPA_PLATFORM=offscreen
+sclang start_foxdot.scd > /dev/null 2>&1 &
+SC_PID=$!
+sleep 4
+
+echo "[3/3] launch FoxDot..."
+echo "=========================================="
+echo " Ctrl+C To exit"
+echo "=========================================="
+
+# Masuk ke FoxDot
+python -m FoxDot
+
+# jaga jaga aja
+echo "Matiin background audio engine..."
+kill $JACK_PID $SC_PID 2>/dev/null

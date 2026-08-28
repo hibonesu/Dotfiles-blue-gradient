@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# YOUTUBE MUSIC TERMINAL (TUI) - FIXED POSITION LIVE LYRICS (FALLBACK LYRICS)
+# ==============================================================================
+
+export SHELL="$(command -v bash)"
+
+if [ -n "$PREFIX" ]; then
+    export PATH="$PREFIX/bin:$PATH"
+    YTDL_PATH="$PREFIX/bin/yt-dlp"
+else
+    export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+    YTDL_PATH="$(command -v yt-dlp)"
+fi
+
+CHAFA_FORMAT="auto"
+[ -n "$TMUX" ] && CHAFA_FORMAT="symbols"
+
+export FZF_DEFAULT_OPTS="
+  --color=bg+:#1e2a44,bg:#000000,spinner:#89b4fa,hl:#89b4fa
+  --color=fg:#cdd6f4,header:#89b4fa,info:#cdd6f4,pointer:#89b4fa
+  --color=marker:#89b4fa,fg+:#ffffff,prompt:#89b4fa,hl+:#89b4fa
+  --border=none
+  --margin=0,0
+  --padding=1,1
+  --layout=reverse
+  --info=inline-right
+  --prompt='❯ '
+  --pointer='❯'
+  --marker='✓'
+  --bind='j:down,k:up'
+"
+
+CACHE_DIR="${TMPDIR:-/tmp}/yt-fzf-cache-$$"
+mkdir -p "$CACHE_DIR"
+trap 'rm -rf "$CACHE_DIR"' EXIT INT TERM
+
+while true; do
+    clear
+    echo -e "\e[38;2;137;180;250m╭──────────────────────────────────────────────╮\e[0m"
+    echo -e "\e[38;2;137;180;250m│  󰗃  \e[1;37mYOUTUBE MUSIC TERMINAL\e[0m                   \e[38;2;137;180;250m│\e[0m"
+    echo -e "\e[38;2;137;180;250m╰──────────────────────────────────────────────╯\e[0m"
+    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track: "
+    read -r QUERY
+
+    [ -z "$QUERY" ] && break
+
+    echo -e "\n  \e[38;2;249;226;175m󱎫 Searching metadata for '$QUERY'...\e[0m"
+    
+    YT_DATA=$(yt-dlp "ytsearch25:$QUERY" \
+        --flat-playlist \
+        --skip-download \
+        --match-filter "!is_live" \
+        --dump-json 2>/dev/null | \
+        jq -r '[.duration_string, .title, .id, (.uploader // "Unknown"), (.track // .title)] | @tsv')
+
+    [ -z "$YT_DATA" ] && continue
+
+    FORMATTED_DATA=$(echo "$YT_DATA" | awk -F'\t' '{
+        dur = ($1 == "null" || $1 == "") ? "--:--" : $1;
+        printf "%-6s │ %s │ %s │ %s │ %s\n", dur, $2, $3, $4, $5
+    }')
+
+    PREVIEW_CMD="id=\$(echo {} | awk -F'│' '{print \$3}' | tr -d ' '); \
+                 thumb=\"$CACHE_DIR/\$id.jpg\"; \
+                 if [ ! -f \"\$thumb\" ]; then \
+                     curl -s -m 2 -L \"https://img.youtube.com/vi/\$id/mqdefault.jpg\" -o \"\$thumb\" 2>/dev/null; \
+                 fi; \
+                 if [ -s \"\$thumb\" ]; then \
+                     chafa --format sixel --size 30x9 \"\$thumb\"; \
+                 else \
+                     echo -e \"\n  \e[31m󰅖 Loading thumbnail...\e[0m\"; \
+                 fi"
+
+    EXECUTE_CMD="id=\$(echo {} | awk -F'│' '{print \$3}' | tr -d ' '); \
+                 title=\$(echo {} | awk -F'│' '{print \$2}' | sed -E -e 's/\(.*\)|\[.*\]//g' -e 's/(official|music|video|audio|lyric|lyrics|hd|4k|- topic|vevo)//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
+                 artist=\$(echo {} | awk -F'│' '{print \$4}' | sed -E -e 's/- topic|vevo|official//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
+                 track_name=\$(echo {} | awk -F'│' '{print \$5}' | sed -E -e 's/\(.*\)|\[.*\]//g' -e 's/(official|music|video|audio|lyric|lyrics|hd|4k|- topic|vevo)//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
+                 thumb=\"$CACHE_DIR/\$id.jpg\"; \
+                 lrc_file=\"$CACHE_DIR/\$id.lrc\"; \
+                 clear; \
+                 echo -e \"\n \e[38;2;137;180;250;1m󰐊 NOW PLAYING\e[0m\n\"; \
+                 if [ -s \"\$thumb\" ]; then \
+                     chafa --format sixel --size 26x7 \"\$thumb\"; \
+                 fi; \
+                 echo -e \" \e[1;35m󰎈 Title  :\e[0m \e[1;37m\$title\e[0m\"; \
+                 echo -e \" \e[1;34mI Artist :\e[0m \e[0;36m\$artist\e[0m\"; \
+                 # Fallback fetcher: coba track_name dulu, kalau kosong coba title
+                 curl -s -G --data-urlencode \"q=\$track_name\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
+                 if [ ! -s \"\$lrc_file\" ]; then \
+                     curl -s -G --data-urlencode \"q=\$title\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
+                 fi; \
+                 MPV_EXTRA_ARGS=\"\"; \
+                 if [ -s \"\$lrc_file\" ]; then \
+                     MPV_EXTRA_ARGS=\"--sub-file=\$lrc_file --sid=1 --osd-level=0\"; \
+                 fi; \
+                 lines=\$(tput lines 2>/dev/null || echo 24); \
+                 echo -ne \"\e[17;\${lines}r\e[17;1H\"; \
+                 mpv --no-video --display-tags=no --msg-level=cplayer=warn --term-osd-bar --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5 \$MPV_EXTRA_ARGS --script-opts=ytdl_hook-ytdl_path=\"$YTDL_PATH\" \"https://www.youtube.com/watch?v=\$id\"; \
+                 echo -ne \"\e[r\"; \
+                 clear"
+
+    echo "$FORMATTED_DATA" | fzf \
+      --border=none \
+      --header=" TIME | TITLE | ID | ARTIST " \
+      --preview-window="top:35%:noborder" \
+      --preview="$PREVIEW_CMD" \
+      --bind="enter:execute($EXECUTE_CMD)"
+done
