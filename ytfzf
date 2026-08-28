@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# YOUTUBE MUSIC TERMINAL (TUI) - FIXED POSITION LIVE LYRICS (FALLBACK LYRICS)
+# YOUTUBE MUSIC TERMINAL (TUI) - FAST & QUIET RECONNECT
 # ==============================================================================
 
 export SHELL="$(command -v bash)"
@@ -47,7 +47,7 @@ while true; do
 
     echo -e "\n  \e[38;2;249;226;175m󱎫 Searching metadata for '$QUERY'...\e[0m"
     
-    YT_DATA=$(yt-dlp "ytsearch25:$QUERY" \
+    YT_DATA=$(yt-dlp "ytsearch15:$QUERY" \
         --flat-playlist \
         --skip-download \
         --match-filter "!is_live" \
@@ -67,7 +67,7 @@ while true; do
                      curl -s -m 2 -L \"https://img.youtube.com/vi/\$id/mqdefault.jpg\" -o \"\$thumb\" 2>/dev/null; \
                  fi; \
                  if [ -s \"\$thumb\" ]; then \
-                     chafa --format sixel --size 30x9 \"\$thumb\"; \
+                     chafa --format kitty --size 30x9 \"\$thumb\"; \
                  else \
                      echo -e \"\n  \e[31m󰅖 Loading thumbnail...\e[0m\"; \
                  fi"
@@ -85,24 +85,23 @@ while true; do
                  fi; \
                  echo -e \" \e[1;35m󰎈 Title  :\e[0m \e[1;37m\$title\e[0m\"; \
                  echo -e \" \e[1;34mI Artist :\e[0m \e[0;36m\$artist\e[0m\"; \
-                 # Fallback fetcher: coba track_name dulu, kalau kosong coba title
-                 curl -s -G --data-urlencode \"q=\$track_name\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
-                 if [ ! -s \"\$lrc_file\" ]; then \
-                     curl -s -G --data-urlencode \"q=\$title\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
-                 fi; \
+                 (curl -s -G --data-urlencode \"q=\$track_name\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
+                  if [ ! -s \"\$lrc_file\" ]; then curl -s -G --data-urlencode \"q=\$title\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; fi) & \
+                 STREAM_URL=\$(yt-dlp -g -f bestaudio \"https://www.youtube.com/watch?v=\$id\" 2>/dev/null); \
+                 wait; \
                  MPV_EXTRA_ARGS=\"\"; \
                  if [ -s \"\$lrc_file\" ]; then \
                      MPV_EXTRA_ARGS=\"--sub-file=\$lrc_file --sid=1 --osd-level=0\"; \
                  fi; \
                  lines=\$(tput lines 2>/dev/null || echo 24); \
                  echo -ne \"\e[17;\${lines}r\e[17;1H\"; \
-                 mpv --no-video --display-tags=no --msg-level=cplayer=warn --term-osd-bar --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5 \$MPV_EXTRA_ARGS --script-opts=ytdl_hook-ytdl_path=\"$YTDL_PATH\" \"https://www.youtube.com/watch?v=\$id\"; \
+                 mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --term-osd-bar --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5 \$MPV_EXTRA_ARGS \"\$STREAM_URL\"; \
                  echo -ne \"\e[r\"; \
                  clear"
 
     echo "$FORMATTED_DATA" | fzf \
       --border=none \
-      --header=" TIME | TITLE | ID | ARTIST " \
+      --header=" TIME  | TITLE | ID | ARTIST " \
       --preview-window="top:35%:noborder" \
       --preview="$PREVIEW_CMD" \
       --bind="enter:execute($EXECUTE_CMD)"
