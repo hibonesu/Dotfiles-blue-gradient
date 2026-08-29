@@ -21,7 +21,9 @@ Inspired by **fff (Fucking File Manager)**.
 * ⌨️ `j` / `k` navigation
 * 🚫 Filters out live videos from search results
 * 📱 Designed with Termux in mind
-* [new] playlist in fzf menu using alt + a to `Autoplay ON/Autoplay OFF`
+* [new] ⏱️ Displays total tracks & overall duration directly in the `fzf` menu
+* [new] 🔃 autoplay tonggle Press `ALT+A` to easily switch between `AUTOPLAY: ON` and `AUTOPLAY: OFF`
+
 ## 📦 Dependencies
 
 Make sure these programs are installed:
