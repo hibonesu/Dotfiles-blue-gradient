@@ -21,7 +21,7 @@ Inspired by **fff (Fucking File Manager)**.
 * ⌨️ `j` / `k` navigation
 * 🚫 Filters out live videos from search results
 * 📱 Designed with Termux in mind
-
+* [new] playlist in fzf menu using alt + a to 'playlist ON/Playlist OFF'
 ## 📦 Dependencies
 
 Make sure these programs are installed:
