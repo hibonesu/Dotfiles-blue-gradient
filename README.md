@@ -23,6 +23,7 @@ Inspired by **fff (Fucking File Manager)**.
 * 📱 Designed with Termux in mind
 * [new] ⏱️ Displays total tracks & overall duration directly in the `fzf` menu
 * [new] 🔃 autoplay tonggle Press `ALT+A` to easily switch between `AUTOPLAY: ON` and `AUTOPLAY: OFF`
+* [new] ⏩ keybind `q` to skip. `shift+q` to force back fzf menu
 
 ## 📦 Dependencies
 
