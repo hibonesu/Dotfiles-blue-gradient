@@ -117,7 +117,7 @@ while true; do
     echo -e "\e[38;2;137;180;250m╭──────────────────────────────────────────────╮\e[0m"
     echo -e "\e[38;2;137;180;250m│  󰗃  \e[1;37mYOUTUBE MUSIC TERMINAL\e[0m                   \e[38;2;137;180;250m│\e[0m"
     echo -e "\e[38;2;137;180;250m╰──────────────────────────────────────────────╯\e[0m"
-    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track / Insert Playlist URL (Kosongkan lalu Enter untuk Exit): "
+    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track / Insert Playlist URL : "
     read -r QUERY
 
     [ -z "$QUERY" ] && break
