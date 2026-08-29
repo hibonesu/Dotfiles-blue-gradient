@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-<<<<<<< HEAD
-# YOUTUBE MUSIC TERMINAL (TUI) - FAST & QUIET RECONNECT
-=======
-# YOUTUBE MUSIC TERMINAL (TUI) - PLAYLIST & AUTOPLAY TOGGLE
->>>>>>> 9194707 (feat: add autoplay toggle and fix sixel preview)
+# YOUTUBE MUSIC TERMINAL (TUI) - PLAYLIST, AUTOPLAY & CONTROLS
 # ==============================================================================
 
 export SHELL="$(command -v bash)"
@@ -17,7 +13,6 @@ else
     YTDL_PATH="$(command -v yt-dlp)"
 fi
 
-#rada ga kepake bikin puyeng doang
 CHAFA_FORMAT="auto"
 [ -n "$TMUX" ] && CHAFA_FORMAT="symbols"
 
@@ -40,15 +35,17 @@ CACHE_DIR="${TMPDIR:-/tmp}/yt-fzf-cache-$$"
 mkdir -p "$CACHE_DIR"
 trap 'rm -rf "$CACHE_DIR"' EXIT INT TERM
 
-# Export CACHE_DIR
 export CACHE_DIR
 
 # ------------------------------------------------------------------------------
 # TREK INDIVIDUAL
+# Return Code MPV:
+#   0 -> Normal / 'q' (Skip music to next / back to fzf kalau mau single play)
+#   2 -> 'Shift+Q' atau 'Ctrl+Q' (force stop & back to FZF)
 # ------------------------------------------------------------------------------
 play_single_track() {
     local line="$1"
-    [ -z "$line" ] && return
+    [ -z "$line" ] && return 0
 
     local id=$(echo "$line" | awk -F'│' '{print $3}' | tr -d ' ')
     local title=$(echo "$line" | awk -F'│' '{print $2}' | sed -E -e 's/\(.*\)|\[.*\]//g' -e 's/(official|music|video|audio|lyric|lyrics|hd|4k|- topic|vevo)//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
@@ -65,7 +62,7 @@ play_single_track() {
         curl -s -m 3 -L "https://img.youtube.com/vi/$id/mqdefault.jpg" -o "$thumb" 2>/dev/null
     fi
 
-    echo -e "\n \e[38;2;137;180;250;1m󰐊 NOW PLAYING\e[0m\n"
+    echo -e "\n \e[38;2;137;180;250;1m󰐊 NOW PLAYING\e[0m \e[90m(q: Skip | Q / Ctrl+q: Quit to FZF)\e[0m\n"
 
     if [ -s "$thumb" ]; then
         chafa --format sixel --size 26x7 "$thumb"
@@ -90,14 +87,26 @@ play_single_track() {
     lines=$(tput lines 2>/dev/null || echo 24)
     echo -ne "\e[17;${lines}r\e[17;1H"
     
-    mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --term-osd-bar --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5 $MPV_EXTRA_ARGS "$STREAM_URL"
+    # Injeksi Pemetaan Tombol Custom MPV secara Langsung:
+    # q      -> Keluar dengan exit code 0 (Next track)
+    # Q/Ctrl+q -> Keluar dengan exit code 2 (Stop total)
+    mpv --no-video \
+        --display-tags=no \
+        --msg-level=ffmpeg=fatal,cplayer=warn \
+        --term-osd-bar \
+        --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5 \
+        --input-conf=<(echo -e "q quit 0\nQ quit 2\nCtrl+q quit 2") \
+        $MPV_EXTRA_ARGS "$STREAM_URL"
     
+    local exit_code=$?
+
     echo -ne "\e[r"
     clear
+
+    return $exit_code
 }
 export -f play_single_track
 
-# Default status Autoplay (OFF)
 AUTOPLAY_MODE=0
 
 # ------------------------------------------------------------------------------
@@ -108,16 +117,13 @@ while true; do
     echo -e "\e[38;2;137;180;250m╭──────────────────────────────────────────────╮\e[0m"
     echo -e "\e[38;2;137;180;250m│  󰗃  \e[1;37mYOUTUBE MUSIC TERMINAL\e[0m                   \e[38;2;137;180;250m│\e[0m"
     echo -e "\e[38;2;137;180;250m╰──────────────────────────────────────────────╯\e[0m"
-    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track / Insert Playlist URL: "
+    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track / Insert Playlist URL (Kosongkan lalu Enter untuk Exit): "
     read -r QUERY
 
     [ -z "$QUERY" ] && break
 
     echo -e "\n  \e[38;2;249;226;175m󱎫 Fetching metadata...\e[0m"
     
-<<<<<<< HEAD
-    YT_DATA=$(yt-dlp "ytsearch15:$QUERY" \
-=======
     if [[ "$QUERY" =~ ^https?://.*list=.* ]]; then
         TARGET="$QUERY"
     else
@@ -125,7 +131,6 @@ while true; do
     fi
 
     YT_DATA=$(yt-dlp "$TARGET" \
->>>>>>> 9194707 (feat: add autoplay toggle and fix sixel preview)
         --flat-playlist \
         --skip-download \
         --match-filter "!is_live" \
@@ -179,41 +184,6 @@ while true; do
                      echo -e \"\n  \e[31m󰅖 Loading thumbnail...\e[0m\"; \
                  fi"
 
-<<<<<<< HEAD
-    EXECUTE_CMD="id=\$(echo {} | awk -F'│' '{print \$3}' | tr -d ' '); \
-                 title=\$(echo {} | awk -F'│' '{print \$2}' | sed -E -e 's/\(.*\)|\[.*\]//g' -e 's/(official|music|video|audio|lyric|lyrics|hd|4k|- topic|vevo)//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
-                 artist=\$(echo {} | awk -F'│' '{print \$4}' | sed -E -e 's/- topic|vevo|official//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
-                 track_name=\$(echo {} | awk -F'│' '{print \$5}' | sed -E -e 's/\(.*\)|\[.*\]//g' -e 's/(official|music|video|audio|lyric|lyrics|hd|4k|- topic|vevo)//gi' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'); \
-                 thumb=\"$CACHE_DIR/\$id.jpg\"; \
-                 lrc_file=\"$CACHE_DIR/\$id.lrc\"; \
-                 clear; \
-                 echo -e \"\n \e[38;2;137;180;250;1m󰐊 NOW PLAYING\e[0m\n\"; \
-                 if [ -s \"\$thumb\" ]; then \
-                     chafa --format sixel --size 26x7 \"\$thumb\"; \
-                 fi; \
-                 echo -e \" \e[1;35m󰎈 Title  :\e[0m \e[1;37m\$title\e[0m\"; \
-                 echo -e \" \e[1;34mI Artist :\e[0m \e[0;36m\$artist\e[0m\"; \
-                 (curl -s -G --data-urlencode \"q=\$track_name\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; \
-                  if [ ! -s \"\$lrc_file\" ]; then curl -s -G --data-urlencode \"q=\$title\" \"https://lrclib.net/api/search\" | jq -r 'map(select(.syncedLyrics != null and .syncedLyrics != \"\")) | .[0].syncedLyrics // empty' > \"\$lrc_file\"; fi) & \
-                 STREAM_URL=\$(yt-dlp -g -f bestaudio \"https://www.youtube.com/watch?v=\$id\" 2>/dev/null); \
-                 wait; \
-                 MPV_EXTRA_ARGS=\"\"; \
-                 if [ -s \"\$lrc_file\" ]; then \
-                     MPV_EXTRA_ARGS=\"--sub-file=\$lrc_file --sid=1 --osd-level=0\"; \
-                 fi; \
-                 lines=\$(tput lines 2>/dev/null || echo 24); \
-                 echo -ne \"\e[17;\${lines}r\e[17;1H\"; \
-                 mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --term-osd-bar --stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5 \$MPV_EXTRA_ARGS \"\$STREAM_URL\"; \
-                 echo -ne \"\e[r\"; \
-                 clear"
-
-    echo "$FORMATTED_DATA" | fzf \
-      --border=none \
-      --header=" TIME  | TITLE | ID | ARTIST " \
-      --preview-window="top:35%:noborder" \
-      --preview="$PREVIEW_CMD" \
-      --bind="enter:execute($EXECUTE_CMD)"
-=======
     while true; do
         if [ "$AUTOPLAY_MODE" -eq 1 ]; then
             STATUS_STR="[AUTOPLAY: ON]"
@@ -221,12 +191,12 @@ while true; do
             STATUS_STR="[AUTOPLAY: OFF]"
         fi
 
-        HEADER_INFO=" TRACKS: $TRACKS | TIME: $TOTAL_PLAYTIME | $STATUS_STR | [ALT+A: Toggle Autoplay]"
+        HEADER_INFO=" TRACKS: $TOTAL_TRACKS | TIME: $TOTAL_PLAYTIME | $STATUS_STR | [ALT+A: Toggle Autoplay]"
 
         FZF_OUT=$(echo "$FORMATTED_DATA" | fzf \
           --border=none \
           --header="$HEADER_INFO" \
-          --preview-window="top:30%:noborder" \
+          --preview-window="top:35%:noborder" \
           --preview="$PREVIEW_CMD" \
           --expect=alt-a)
 
@@ -235,32 +205,32 @@ while true; do
         KEY_PRESSED=$(echo "$FZF_OUT" | head -n 1)
         SELECTED_LINE=$(echo "$FZF_OUT" | tail -n +2)
 
-        # Alt+A, ubah status Autoplay (Toggle ON/OFF)
         if [ "$KEY_PRESSED" = "alt-a" ]; then
             if [ "$AUTOPLAY_MODE" -eq 1 ]; then
                 AUTOPLAY_MODE=0
             else
                 AUTOPLAY_MODE=1
             fi
-            # stanby fzf menu
+            continue
         fi
 
         [ -z "$SELECTED_LINE" ] && continue
 
-        # executor enter
         if [ "$AUTOPLAY_MODE" -eq 1 ]; then
-            # Mode Autoplay ON: Memutar berurutan dari trek yang dipilih sampai akhir playlist
             SELECTED_ID=$(echo "$SELECTED_LINE" | awk -F'│' '{print $3}' | tr -d ' ')
             START_LINE=$(echo "$FORMATTED_DATA" | grep -n "$SELECTED_ID" | cut -d: -f1)
             PLAYLIST_QUEUE=$(echo "$FORMATTED_DATA" | tail -n +"$START_LINE")
 
             echo "$PLAYLIST_QUEUE" | while IFS= read -r line; do
                 play_single_track "$line"
+                status=$?
+                # Jika exit code = 2 (user menekan Shift+Q / Ctrl+Q), batalkan seluruh loop playlist!
+                if [ $status -eq 2 ]; then
+                    break
+                fi
             done
         else
-            # Mode Autoplay OFF: hanya 1 yg dipilih
             play_single_track "$SELECTED_LINE"
         fi
     done
->>>>>>> 9194707 (feat: add autoplay toggle and fix sixel preview)
 done
