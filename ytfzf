@@ -85,6 +85,16 @@ play_single_track() {
     local lrc_raw="$CACHE_DIR/${id}_raw.lrc"
     local lrc_final="$CACHE_DIR/${id}.lrc"
     local lrc_json="$CACHE_DIR/${id}.json"
+    local stream_tmp="$CACHE_DIR/${id}.stream"
+
+    # --------------------------------------------------------------------------
+    # 0. MULAI FETCH AUDIO STREAM DI BACKGROUND (PARALEL DENGAN LIRIK & THUMBNAIL)
+    #    Sebelumnya ini baru jalan setelah semua proses lirik selesai, jadi
+    #    latency-nya numpuk. Sekarang jalan bareng.
+    # --------------------------------------------------------------------------
+    ( yt-dlp --print "%(url)s" -f bestaudio "https://www.youtube.com/watch?v=$id" \
+        > "$stream_tmp" 2>/dev/null ) &
+    local stream_pid=$!
 
     # --------------------------------------------------------------------------
     # 1. CLEANING METADATA & PARSING (FIXED REGEX)
@@ -126,7 +136,7 @@ play_single_track() {
     else
         # Tahap 1: Exact Metadata
         if [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ]; then
-            curl -sS -m 4 -G --data-urlencode "track_name=$pure_title" \
+            curl -sS -m 1 -G --data-urlencode "track_name=$pure_title" \
                            --data-urlencode "artist_name=$pure_artist" \
                            "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
 
@@ -137,7 +147,7 @@ play_single_track() {
 
         # Tahap 2: Fallback Judul SAJA
         if [ ! -s "$lrc_raw" ] && [ -n "$pure_title" ]; then
-            curl -sS -m 4 -G --data-urlencode "q=$pure_title" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+            curl -sS -m 1 -G --data-urlencode "q=$pure_title" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
             if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
                 pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
             fi
@@ -148,7 +158,7 @@ play_single_track() {
             local search_query="$pure_title"
             [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ] && search_query="$pure_title $pure_artist"
 
-            curl -sS -m 4 -G --data-urlencode "q=$search_query" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+            curl -sS -m 1 -G --data-urlencode "q=$search_query" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
             if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
                 pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
             fi
@@ -158,7 +168,7 @@ play_single_track() {
         if [ ! -s "$lrc_raw" ]; then
             local clean_fallback_title=$(echo "$pure_title" | sed -E 's/\([^)]*\)//g; s/\[[^]]*\]//g; s/^[[:space:]]+//;s/[[:space:]]+$//')
             if [ -n "$clean_fallback_title" ]; then
-                curl -sS -m 4 -G --data-urlencode "q=$clean_fallback_title $pure_artist" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+                curl -sS -m 1 -G --data-urlencode "q=$clean_fallback_title $pure_artist" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
                 if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
                     pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
                 fi
@@ -186,7 +196,7 @@ play_single_track() {
     fi
 
     echo -ne "\e[r"; clear
-    if [ ! -f "$thumb" ] || [ ! -s "$thumb" ]; then curl -s -m 3 -L "https://img.youtube.com/vi/$id/mqdefault.jpg" -o "$thumb" 2>/dev/null; fi
+    if [ ! -f "$thumb" ] || [ ! -s "$thumb" ]; then curl -s -m 1 -L "https://img.youtube.com/vi/$id/mqdefault.jpg" -o "$thumb" 2>/dev/null; fi
 
     # TAMPILAN NOW PLAYING VERSI UPDATED
     echo -e "\n\e[38;2;137;180;250m󰐊 NOW PLAYING\e[0m"
@@ -208,10 +218,10 @@ play_single_track() {
     echo -e "  \e[90mPlaying from YouTube\e[0m"
     echo
 
-    # FETCH AUDIO STREAM VIA YT-DLP
-    local stream_info
-    stream_info=$(yt-dlp --print "%(url)s" -f bestaudio "https://www.youtube.com/watch?v=$id" 2>/dev/null)
-    local stream_url=$(echo "$stream_info" | head -n 1)
+    # AMBIL HASIL AUDIO STREAM (sudah jalan di background sejak awal fungsi)
+    wait "$stream_pid" 2>/dev/null
+    local stream_url
+    stream_url=$(head -n 1 "$stream_tmp" 2>/dev/null)
 
     if [ -z "$stream_url" ]; then
         echo -e "  \e[31m󰅖 Unable to get audio stream\e[0m"
@@ -224,7 +234,12 @@ play_single_track() {
         mpv_opts+=("--sub-file=$lrc_final" "--sid=1")
     fi
 
-    mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --osd-level=1 --osd-on-seek=no --osd-msg1="" --term-osd-bar --term-osd-bar-chars=" ━╸─ " --profile=fast --hwdec=auto --audio-buffer=2 --input-conf=<(echo -e "q quit 0\nQ quit 2\nCtrl+q quit 2") "${mpv_opts[@]}" "$stream_url"
+    mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn \
+        --profile=fast --hwdec=auto --audio-buffer=2 \
+        --term-osd-bar --term-osd-bar-chars=" ━╸─ " \
+        --sid=1 --sub-visibility=yes \
+        --input-conf=<(echo -e "q quit 0\nQ quit 2\nCtrl+q quit 2") \
+        "${mpv_opts[@]}" "$stream_url"
     local exit_code=$?
     echo -ne "\e[r"; clear
     return $exit_code
@@ -326,10 +341,10 @@ while true; do
     PREVIEW_CMD="id=\$(echo {} | awk -F'│' '{print \$3}' | tr -d ' '); \
                  thumb=\"$CACHE_DIR/\$id.jpg\"; \
                  if [ ! -f \"\$thumb\" ]; then \
-                     curl -s -m 2 -L \"https://img.youtube.com/vi/\$id/mqdefault.jpg\" -o \"\$thumb\" 2>/dev/null; \
+                     curl -s -m 1 -L \"https://img.youtube.com/vi/\$id/mqdefault.jpg\" -o \"\$thumb\" 2>/dev/null; \
                  fi; \
                  if [ -s \"\$thumb\" ]; then \
-                     chafa --format=sixel --size 30x9 \"\$thumb\" 2>/dev/null; \
+                     chafa --format=kitty --size 30x9 \"\$thumb\" 2>/dev/null; \
                  else \
                      echo -e \"\n  \e[31m󰅖 Loading thumbnail...\e[0m\"; \
                  fi"
