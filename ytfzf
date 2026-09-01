@@ -45,17 +45,38 @@ export HISTORY_FILE
 export CHAFA_FORMAT
 
 # ------------------------------------------------------------------------------
+# HELPER: CONVERT SECONDS TO HUMAN READABLE DURATION
+# ------------------------------------------------------------------------------
+format_total_duration() {
+    local total_sec="$1"
+    local h=$((total_sec / 3600))
+    local m=$(((total_sec % 3600) / 60))
+    local s=$((total_sec % 60))
+    
+    if [ $h -gt 0 ]; then
+        printf "%dh %dm %ds" $h $m $s
+    elif [ $m -gt 0 ]; then
+        printf "%dm %ds" $m $s
+    else
+        printf "%ds" $s
+    fi
+}
+export -f format_total_duration
+
+# ------------------------------------------------------------------------------
 # TRACK INDIVIDUAL & PIPELINE LOGIC
 # ------------------------------------------------------------------------------
 play_single_track() {
     local line="$1"
     [ -z "$line" ] && return 0
 
-    local id raw_title raw_artist raw_track
+    local id raw_title raw_artist raw_track dur_sec
     id=$(echo "$line" | awk -F'│' '{print $3}' | tr -d ' ')
     raw_title=$(echo "$line" | awk -F'│' '{print $2}' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
     raw_artist=$(echo "$line" | awk -F'│' '{print $4}' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
     raw_track=$(echo "$line" | awk -F'│' '{print $5}' | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+    dur_sec=$(echo "$line" | awk -F'│' '{print $6}' | tr -d ' ')
+    [[ "$dur_sec" =~ ^[0-9]+$ ]] || dur_sec=0
     [ -z "$id" ] && return 0
 
     if ! grep -qF "$id" "$HISTORY_FILE" 2>/dev/null; then echo "$line" >> "$HISTORY_FILE"; fi
@@ -66,8 +87,9 @@ play_single_track() {
     local lrc_json="$CACHE_DIR/${id}.json"
 
     # --------------------------------------------------------------------------
-    # 1. CLEANING METADATA & PARSING
+    # 1. CLEANING METADATA & PARSING (FIXED REGEX)
     # --------------------------------------------------------------------------
+
     local title="$raw_title"
     local artist="$raw_artist"
     local pure_title pure_artist
@@ -78,45 +100,115 @@ play_single_track() {
         -e 's/^[[:space:]]+//;s/[[:space:]]+$//')
 
     if [[ -z "$artist" || "$artist" == "Unknown" ]] && [[ "$title" == *" - "* ]]; then
-        artist=$(printf '%s\n' "$title" | cut -d'-' -f1 | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
-        title=$(printf '%s\n' "$title" | cut -d'-' -f2- | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+        artist="${title%% - *}"
+        title="${title#*" - "}"
+        artist=$(printf '%s\n' "$artist" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
+        title=$(printf '%s\n' "$title" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')
     fi
 
-    title=$(printf '%s\n' "$title" | sed -E \
-        -e 's/[[:space:]]*\([^)]*(official|music|video|audio|lyric|lyrics|hd|4k|topic|vevo|visualizer|full song|reupload)[^)]*\)//gi' \
-        -e 's/[[:space:]]*\[[^]]*(official|music|video|audio|lyric|lyrics|hd|4k|topic|vevo|visualizer|full song|reupload)[^]]*\]//gi' \
-        -e 's/^[[:space:]]+//;s/[[:space:]]+$//')
+    pure_title="$title"
+    pure_artist="$artist"
 
-    pure_title=$(printf '%s\n' "$title" | sed -E \
-        -e 's/[[:space:]]*\([^)]*\)//gi' \
-        -e 's/[[:space:]]*\[[^]]*\]//gi' \
-        -e 's/[[:space:]]+(feat\.|ft\.).*$//gi' \
-        -e 's/[[:space:]]+(slowed|reverb|remix|speed up|sped up|nightcore|edit|pitch|tiktok|ver|version).*$//gi' \
-        -e 's/^[[:space:]]+//;s/[[:space:]]+$//')
-
-    pure_artist=$(printf '%s\n' "$artist" | sed -E \
-        -e 's/[[:space:]]*\([^)]*\)//gi' \
-        -e 's/[[:space:]]*\[[^]]*\]//gi' \
-        -e 's/[[:space:]]+(official|topic|vevo|records).*$//gi' \
-        -e 's/^[[:space:]]+//;s/[[:space:]]+$//')
-
-    [ -z "$pure_title" ] && pure_title="$title"
-
-    # Deteksi lagu modifikasi (Slowed/Speed Up dll)
     local is_modified=0
-    if echo "$raw_title" | grep -Ei -q 'slowed|speed|sped[ -]?up|nightcore|reverb|remix|edit|pitch|digicore'; then
+    if echo "$raw_title" | grep -Ei -q '(sped[ -]?up|speed[ -]?up|slowed|reverb)'; then
         is_modified=1
+    fi
+
+    # --------------------------------------------------------------------------
+    # 2. PEMROSESAN LIRIK (DILAKUKAN SEBELUM RENDER NOW PLAYING)
+    # --------------------------------------------------------------------------
+    rm -f "$lrc_json" "$lrc_raw" "$lrc_final"
+    local lyric_status_msg=""
+    local lyric_approx_warning=0
+
+    if [ "$is_modified" -eq 1 ]; then
+        lyric_status_msg="\e[33m󰅖 Lyrics: Disabled (Sped Up/Slowed/Reverb)\e[0m"
+    else
+        # Tahap 1: Exact Metadata
+        if [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ]; then
+            curl -sS -m 4 -G --data-urlencode "track_name=$pure_title" \
+                           --data-urlencode "artist_name=$pure_artist" \
+                           "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+
+            if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
+                pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
+            fi
+        fi
+
+        # Tahap 2: Fallback Judul SAJA
+        if [ ! -s "$lrc_raw" ] && [ -n "$pure_title" ]; then
+            curl -sS -m 4 -G --data-urlencode "q=$pure_title" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+            if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
+                pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
+            fi
+        fi
+
+        # Tahap 3: Fallback Query (Judul + Artist)
+        if [ ! -s "$lrc_raw" ]; then
+            local search_query="$pure_title"
+            [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ] && search_query="$pure_title $pure_artist"
+
+            curl -sS -m 4 -G --data-urlencode "q=$search_query" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+            if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
+                pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
+            fi
+        fi
+
+        # Tahap 4: Fallback Judul Tanpa Kurung
+        if [ ! -s "$lrc_raw" ]; then
+            local clean_fallback_title=$(echo "$pure_title" | sed -E 's/\([^)]*\)//g; s/\[[^]]*\]//g; s/^[[:space:]]+//;s/[[:space:]]+$//')
+            if [ -n "$clean_fallback_title" ]; then
+                curl -sS -m 4 -G --data-urlencode "q=$clean_fallback_title $pure_artist" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
+                if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
+                    pick_synced_lyrics "$lrc_json" "$dur_sec" > "$lrc_raw" 2>/dev/null
+                fi
+            fi
+        fi
+
+        # Tahap 5: Best-effort
+        if [ ! -s "$lrc_raw" ] && jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
+            pick_synced_lyrics "$lrc_json" "$dur_sec" 1 > "$lrc_raw" 2>/dev/null
+            if [ -s "$lrc_raw" ]; then
+                lyric_approx_warning=1
+            fi
+        fi
+
+        # Penentuan String Indikator Status Lirik
+        if [ -s "$lrc_raw" ]; then
+            if [ "$lyric_approx_warning" -eq 1 ]; then
+                lyric_status_msg="\e[33m󰎆 Lyrics: Synced (Approx. Duration)\e[0m"
+            else
+                lyric_status_msg="\e[32m󰎆 Lyrics: Synced (LRCLIB)\e[0m"
+            fi
+        else
+            lyric_status_msg="\e[90m󰅖 Lyrics: Unavailable\e[0m"
+        fi
     fi
 
     echo -ne "\e[r"; clear
     if [ ! -f "$thumb" ] || [ ! -s "$thumb" ]; then curl -s -m 3 -L "https://img.youtube.com/vi/$id/mqdefault.jpg" -o "$thumb" 2>/dev/null; fi
-    echo -e "\n \e[38;2;137;180;250;1m󰐊 NOW PLAYING\e[0m \e[90m(q: Skip | Q / Ctrl+q: Quit to FZF | z/x: Sub Delay)\e[0m\n"
-    if [ -s "$thumb" ]; then chafa --format=kitty --size 26x7 "$thumb" 2>/dev/null || echo -e "  \e[31m󰅖 Thumbnail Render Failed\e[0m\n"; else echo -e "  \e[31m󰅖 Thumbnail Unavailable\e[0m\n"; fi
-    echo -e " "
-    echo -e " \e[1;35m󰎈 Title  :\e[0m \e[1;37m$title\e[0m"
-    echo -e " \e[1;34m󰠃 Artist :\e[0m \e[0;36m$artist\e[0m\n"
 
-    # FETCH AUDIO STREAM VIA YT-DLP (Dengan Error Handling yang Diperbaiki)
+    # TAMPILAN NOW PLAYING VERSI UPDATED
+    echo -e "\n\e[38;2;137;180;250m󰐊 NOW PLAYING\e[0m"
+    echo -e "\e[90m   q Skip   Q/Ctrl+q Back   z/x Sub Delay\e[0m\n"
+
+    if [ -s "$thumb" ]; then
+        chafa --format=kitty --size 32x10 "$thumb" 2>/dev/null ||
+            echo -e "  \e[31m󰅖 Thumbnail unavailable\e[0m"
+    else
+        echo -e "  \e[31m󰅖 Thumbnail unavailable\e[0m"
+    fi
+
+    echo
+    echo -e "  \e[1;37m$title\e[0m"
+    echo -e "  \e[38;2;137;180;250m$artist\e[0m"
+    echo -e "  $lyric_status_msg"
+    echo
+    echo -e "  \e[90m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
+    echo -e "  \e[90mPlaying from YouTube\e[0m"
+    echo
+
+    # FETCH AUDIO STREAM VIA YT-DLP
     local stream_info
     stream_info=$(yt-dlp --print "%(url)s" -f bestaudio "https://www.youtube.com/watch?v=$id" 2>/dev/null)
     local stream_url=$(echo "$stream_info" | head -n 1)
@@ -126,55 +218,32 @@ play_single_track() {
         return 1
     fi
 
-    rm -f "$lrc_json" "$lrc_raw" "$lrc_final"
-
-    # --------------------------------------------------------------------------
-    # 2. PEMROSESAN LIRIK MULTI-STAGE FALLBACK
-    # --------------------------------------------------------------------------
-    if [ "$is_modified" -eq 1 ]; then
-        echo -e " \e[33m󰅖 Track is modified (Slowed/Remix). Searching original synced lyrics...\e[0m"
-    fi
-
-    # Tahap 1: Search Exact Metadata
-    if [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ]; then
-        curl -sS -m 4 -G --data-urlencode "track_name=$pure_title" \
-                       --data-urlencode "artist_name=$pure_artist" \
-                       "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
-
-        if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
-            jq -r 'map(select((.syncedLyrics // "") != "")) | .[0].syncedLyrics // empty' "$lrc_json" > "$lrc_raw" 2>/dev/null
-        fi
-    fi
-
-    # Tahap 2: Fallback Query
-    if [ ! -s "$lrc_raw" ]; then
-        local search_query="$pure_title"
-        [ -n "$pure_artist" ] && [ "$pure_artist" != "Unknown" ] && search_query="$pure_title $pure_artist"
-        
-        curl -sS -m 4 -G --data-urlencode "q=$search_query" "https://lrclib.net/api/search" > "$lrc_json" 2>/dev/null
-        if jq -e 'type == "array" and length > 0' "$lrc_json" >/dev/null 2>&1; then
-            jq -r 'map(select((.syncedLyrics // "") != "")) | .[0].syncedLyrics // empty' "$lrc_json" > "$lrc_raw" 2>/dev/null
-        fi
-    fi
-
     local -a mpv_opts=()
     if [ -s "$lrc_raw" ]; then
         cp "$lrc_raw" "$lrc_final"
         mpv_opts+=("--sub-file=$lrc_final" "--sid=1")
-        if [ "$is_modified" -eq 1 ]; then
-            echo -e " \e[33m󰅖 Synced lyrics loaded. Use 'z' / 'x' in MPV to adjust lyric speed/delay.\e[0m\n"
-        fi
-    else
-        echo -e " \e[33m󰅖 No synced-lyrics match found in LRCLIB\e[0m"
-        echo -e " \e[90m   Playing audio without lyrics...\e[0m\n"
     fi
 
-    mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --osd-level=1 --osd-on-seek=no --osd-msg1="" --term-osd-bar --term-osd-bar-chars=" ━╸─ " --profile=fast --hwdec=auto-safe --audio-buffer=2 --input-conf=<(echo -e "q quit 0\nQ quit 2\nCtrl+q quit 2") "${mpv_opts[@]}" "$stream_url"
+    mpv --no-video --display-tags=no --msg-level=ffmpeg=fatal,cplayer=warn --osd-level=1 --osd-on-seek=no --osd-msg1="" --term-osd-bar --term-osd-bar-chars=" ━╸─ " --profile=fast --hwdec=auto --audio-buffer=2 --input-conf=<(echo -e "q quit 0\nQ quit 2\nCtrl+q quit 2") "${mpv_opts[@]}" "$stream_url"
     local exit_code=$?
     echo -ne "\e[r"; clear
     return $exit_code
 }
 
+pick_synced_lyrics() {
+    local json_file="$1" target_dur="$2" force="${3:-0}"
+    [[ "$target_dur" =~ ^[0-9]+$ ]] || target_dur=0
+    [[ "$force" =~ ^[0-9]+$ ]] || force=0
+    jq -r --argjson dur "$target_dur" --argjson force "$force" '
+        map(select((.syncedLyrics // "") != ""))
+        | map(. + {_diff: (if $dur > 0 then ((.duration - $dur) | fabs) else 0 end)})
+        | sort_by(._diff)
+        | .[0]
+        | select(. != null and ($force == 1 or $dur == 0 or ._diff <= 3))
+        | .syncedLyrics // empty
+    ' "$json_file" 2>/dev/null
+}
+export -f pick_synced_lyrics
 export -f play_single_track
 
 AUTOPLAY_MODE=0
@@ -184,11 +253,11 @@ AUTOPLAY_MODE=0
 # ------------------------------------------------------------------------------
 while true; do
     clear
-    echo -e "\e[38;2;137;180;250m╭──────────────────────────────────────────────╮\e[0m"
-    echo -e "\e[38;2;137;180;250m│  󰗃  \e[1;37mYOUTUBE MUSIC TERMINAL\e[0m                   \e[38;2;137;180;250m│\e[0m"
-    echo -e "\e[38;2;137;180;250m╰──────────────────────────────────────────────╯\e[0m"
-    echo -e "  \e[90m(Enter: History | q: Quit Script)\e[0m"
-    echo -ne "  \e[38;2;203;166;247m❯\e[0m Search Track / Playlist : "
+    echo
+    echo -e "\e[38;2;137;180;250m󰎆  \e[1;37mYOUTUBE MUSIC\e[0m"
+    echo -e "\e[90m   Search • Discover • Listen\e[0m"
+    echo
+    echo -ne "\e[38;2;203;166;247m❯\e[0m "
     
     read -r -n 1 FIRST_CHAR
 
@@ -244,11 +313,15 @@ while true; do
                 else
                     dur = sprintf("%02d:%02d", m, s);
             }
-            printf "%-8s │ %s │ %s │ %s │ %s\n", dur, $2, $1, $3, $4
+            printf "%-8s │ %s │ %s │ %s │ %s │ %s\n", dur, $2, $1, $3, $4, sec
         }')
     fi
 
     TOTAL_TRACKS=$(echo "$FORMATTED_DATA" | wc -l | tr -d ' ')
+    
+    # --- HITUNG DURAIS TOTAL PLAYLIST ---
+    TOTAL_SECONDS=$(echo "$FORMATTED_DATA" | awk -F'│' '{sum += $6} END {print sum}')
+    TOTAL_DURATION_STR=$(format_total_duration "${TOTAL_SECONDS:-0}")
 
     PREVIEW_CMD="id=\$(echo {} | awk -F'│' '{print \$3}' | tr -d ' '); \
                  thumb=\"$CACHE_DIR/\$id.jpg\"; \
@@ -263,20 +336,26 @@ while true; do
 
     while true; do
         if [ "$AUTOPLAY_MODE" -eq 1 ]; then
-            STATUS_STR="[AUTOPLAY: ON]"
+            STATUS_STR="󰐎 AUTOPLAY"
         else
-            STATUS_STR="[AUTOPLAY: OFF]"
+            STATUS_STR="󰐎 MANUAL"
         fi
 
-        HEADER_INFO=" TRACKS: $TOTAL_TRACKS | $STATUS_STR | [TAB: Select Queue] [ALT+A: Toggle Autoplay]"
+        HEADER_INFO="$TOTAL_TRACKS TRACKS ($TOTAL_DURATION_STR) $STATUS_STR  TAB QUEUE  ALT+A TOGGLE"
 
         FZF_OUT=$(echo "$FORMATTED_DATA" | fzf \
-          --multi \
-          --border=none \
-          --header="$HEADER_INFO" \
-          --preview-window="top:35%:noborder" \
-          --preview="$PREVIEW_CMD" \
-          --expect=alt-a)
+            --multi \
+            --border=none \
+            --header="$HEADER_INFO" \
+            --header-first \
+            --no-scrollbar \
+            --layout=reverse \
+            --preview-window="top:38%:noborder" \
+            --preview="$PREVIEW_CMD" \
+            --prompt=" " \
+            --pointer="❯" \
+            --marker="✓" \
+            --expect=alt-a)
 
         [ -z "$FZF_OUT" ] && break
 
